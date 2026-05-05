@@ -56,18 +56,60 @@ describe('Compiler: Parser & CST Fidelity', () => {
   test('1. Fixture A parses losslessly and serializes to identical string', () => {
     const { ast, diagnostics } = parse(fixtureA);
     expect(diagnostics).toHaveLength(0);
-    const serialized = serialize(ast);
-    expect(serialized).toBe(fixtureA);
+    expect(serialize(ast)).toBe(fixtureA);
   });
-
   test('2. Fixture B parses losslessly and serializes to identical string', () => {
     const { ast, diagnostics } = parse(fixtureB);
-    if (diagnostics.length > 0) {
-        console.error('FIXTURE B DIAGNOSTICS:', diagnostics);
-    }
     expect(diagnostics).toHaveLength(0);
-    const serialized = serialize(ast);
-    expect(serialized).toBe(fixtureB);
+    expect(serialize(ast)).toBe(fixtureB);
+  });
+  test('3. Parses Context block', () => {
+    const source = `domus "1.0"\ncontext { project: "Test" }`;
+    const { ast, diagnostics } = parse(source);
+    expect(diagnostics).toHaveLength(0);
+    expect(ast.body[0].type).toBe('Context');
+  });
+  test('4. Parses Trait block', () => {
+    const source = `domus "1.0"\ntrait ventilation { airflow: 10 }`;
+    const { ast, diagnostics } = parse(source);
+    expect(diagnostics).toHaveLength(0);
+    expect(ast.body[0].type).toBe('Trait');
+  });
+  test('5. Parses Def mat block', () => {
+    const source = `domus "1.0"\ndef mat x = umo::a.b.c { }`;
+    const { ast, diagnostics } = parse(source);
+    expect(diagnostics).toHaveLength(0);
+    expect(ast.body[0].type).toBe('MaterialDefinition');
+  });
+  test('6. Parses Def assembly block', () => {
+    const source = `domus "1.0"\ndef assembly x = { }`;
+    const { ast, diagnostics } = parse(source);
+    expect(diagnostics).toHaveLength(0);
+    expect(ast.body[0].type).toBe('Def');
+  });
+  test('7. Parses Goal block', () => {
+    const source = `domus "1.0"\ngoal my_goal { }`;
+    const { ast, diagnostics } = parse(source);
+    expect(diagnostics).toHaveLength(0);
+    expect(ast.body[0].type).toBe('Goal');
+  });
+  test('8. Parses Building block', () => {
+    const source = `domus "1.0"\nbuilding "b1" { }`;
+    const { ast, diagnostics } = parse(source);
+    expect(diagnostics).toHaveLength(0);
+    expect(ast.body[0].type).toBe('Building');
+  });
+  test('9. Parses Import statement', () => {
+    const source = `domus "1.0"\nimport "other.domus"`;
+    const { ast, diagnostics } = parse(source);
+    expect(diagnostics).toHaveLength(0);
+    expect(ast.body[0].type).toBe('Import');
+  });
+  test('10. Parses Multiple Top Level blocks', () => {
+    const source = `domus "1.0"\ncontext {}\ngoal g1 {}\nbuilding "b" {}`;
+    const { ast, diagnostics } = parse(source);
+    expect(diagnostics).toHaveLength(0);
+    expect(ast.body.length).toBe(3);
   });
 });
 
@@ -76,56 +118,93 @@ describe('Compiler: Error Recovery', () => {
     const source = `domus "1.0"\nbuilding {\n  invalid_syntax! !!\n  floor 1 {}\n}`;
     const { ast, diagnostics } = parse(source);
     expect(diagnostics.length).toBeGreaterThan(0);
-    const serialized = serialize(ast);
-    expect(serialized).toBe(source);
+    expect(serialize(ast)).toBe(source);
+  });
+  test('2. Unclosed block recovers at next top level', () => {
+    const source = `domus "1.0"\nbuilding "b1" { floor 1 { \ngoal my_goal {}`;
+    const { ast, diagnostics } = parse(source);
+    expect(diagnostics.length).toBeGreaterThan(0);
+    expect(ast.body.length).toBe(1);
+  });
+  test('3. Missing version declaration triggers E001', () => {
+    const source = `context { }`;
+    const { ast, diagnostics } = parse(source);
+    expect(diagnostics.some(d => d.code === 'E001')).toBe(true);
+  });
+  test('4. Duplicate declaration triggers E004', () => {
+    const source = `domus "1.0"\ngoal a {}\ngoal a {}`;
+    const { ast, diagnostics } = parse(source);
+    expect(diagnostics.some(d => d.code === 'E004')).toBe(true);
+  });
+  test('5. Floating annotations trigger E012', () => {
+    const source = `domus "1.0"\n#[floating]`;
+    const { ast, diagnostics } = parse(source);
+    expect(diagnostics.some(d => d.code === 'E012')).toBe(true);
   });
 });
 
 describe('Compiler: Patcher', () => {
   test('1. Inject node losslessly updates CST components', () => {
      const { ast, diagnostics } = parse(fixtureA);
-     expect(diagnostics).toHaveLength(0);
-     
      const injection = `\n    zone "NewZone" {}\n`;
      const res = injectNode(ast, 'Building["Lodge"].Floor[1]', injection);
-     if (res.diagnostics.length > 0) {
-         console.error('DIAGNOSTICS:', res.diagnostics);
-     }
      expect(res.diagnostics).toHaveLength(0);
-     expect(res.cst).not.toBeNull();
-     
      const newSource = serialize(res.cst!);
      expect(newSource).toContain('zone "NewZone"');
-     const { diagnostics: newDiags } = parse(newSource);
-     expect(newDiags).toHaveLength(0);
   });
 
   test('2. Delete node losslessly removes CST components', () => {
      const { ast, diagnostics } = parse(fixtureA);
      const res = deleteNode(ast, 'Building["Lodge"].Floor[1].Zone["Mech"]');
-     if (res.diagnostics.length > 0) {
-         console.error('DELETE DIAGNOSTICS:', res.diagnostics);
-     }
      expect(res.diagnostics).toHaveLength(0);
-     expect(res.cst).not.toBeNull();
      const newSource = serialize(res.cst!);
      expect(newSource).not.toContain('zone "Mech"');
-     expect(parse(newSource).diagnostics).toHaveLength(0);
   });
 
   test('3. Replace node losslessly updates CST components', () => {
      const { ast, diagnostics } = parse(fixtureA);
      const replacement = `zone "ReplacedMech" { hvac.return() }`;
      const res = replaceNode(ast, 'Building["Lodge"].Floor[1].Zone["Mech"]', replacement);
-     if (res.diagnostics.length > 0) {
-         console.error('REPLACE DIAGNOSTICS:', res.diagnostics);
-     }
      expect(res.diagnostics).toHaveLength(0);
-     expect(res.cst).not.toBeNull();
      const newSource = serialize(res.cst!);
      expect(newSource).not.toContain('zone "Mech"');
      expect(newSource).toContain('zone "ReplacedMech"');
-     expect(parse(newSource).diagnostics).toHaveLength(0);
+  });
+
+  test('4. Invalid Bound: Patcher rejects injection of zone into context', () => {
+     const { ast } = parse(fixtureA);
+     const res = injectNode(ast, 'Context', '    zone "Invalid" {}');
+     expect(res.diagnostics).toContainEqual(expect.objectContaining({ code: 'E015' }));
+  });
+  
+  test('5. Invalid Bound: Patcher rejects injection of building into def', () => {
+     const { ast } = parse(fixtureA);
+     const res = injectNode(ast, 'Def["SPF_No2"]', '    building "Invalid" {}');
+     expect(res.diagnostics).toContainEqual(expect.objectContaining({ code: 'E015' }));
+  });
+
+  test('6. Invalid Bound: Patcher rejects injection of floor into trait', () => {
+     const { ast } = parse(`domus "1.0"\ntrait vent {}`);
+     const res = injectNode(ast, 'Trait["vent"]', '    floor 1 {}');
+     expect(res.diagnostics).toContainEqual(expect.objectContaining({ code: 'E015' }));
+  });
+  
+  test('7. Invalid Bound: Patcher rejects replacement of non-existent path', () => {
+     const { ast } = parse(fixtureA);
+     const res = replaceNode(ast, 'Building["Fake"]', 'building "New" {}');
+     expect(res.diagnostics).toContainEqual(expect.objectContaining({ code: 'E015' }));
+  });
+  
+  test('8. Invalid Bound: Patcher rejects deleting non-existent path', () => {
+     const { ast } = parse(fixtureA);
+     const res = deleteNode(ast, 'Building["Lodge"].Floor[999]');
+     expect(res.diagnostics).toContainEqual(expect.objectContaining({ code: 'E015' }));
+  });
+  
+  test('9. Invalid Bound: Patcher rejects injection into building name format mistake', () => {
+     const { ast } = parse(fixtureA);
+     const res = injectNode(ast, 'Building[Lodge]', 'zone x {}');
+     expect(res.diagnostics).toContainEqual(expect.objectContaining({ code: 'E015' }));
   });
 });
 

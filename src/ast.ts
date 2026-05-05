@@ -54,3 +54,9 @@ export interface MaterialDefinition extends CSTNode {
   properties: MaterialProperty[];
   boundedStates: BoundedState[];
 }
+
+export const MaterialPropertySchema: Record<string, { isRequired: boolean }> = {
+    'mech.density': { isRequired: true },
+    'mech.E': { isRequired: true },
+    'therm.lambda': { isRequired: true },
+};

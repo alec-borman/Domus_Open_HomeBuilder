@@ -1,4 +1,4 @@
-import { Token, CSTNode, Program, ParseDiagnostic } from './ast.js';
+import { Token, CSTNode, Program, ParseDiagnostic, MaterialProperty, BoundedState, MaterialPropertySchema } from './ast.js';
 import { Lexer } from './lexer.js';
 
 export function parse(input: string): { ast: Program, diagnostics: ParseDiagnostic[], treeNodeCount: number } {
@@ -50,7 +50,7 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
 
   function checkUnresolved(identifier: string, token: Token, obj?: any) {
       if (!declaredNames.has(identifier)) {
-          if (!['umo', 'geo', 'optimize', 'maximize_solar_gain', 'hvac', 'site', 'perimeter', 'ft', 'm', 'kg_m3', 'MPa', 'W_m2K', 'pcf', 'psi'].includes(identifier)) {
+          if (!['umo', 'geo', 'optimize', 'site', 'context', 'hvac', 'perimeter', 'maximize_solar_gain'].includes(identifier)) {
               report('E003', `Undeclared identifier reference: ${identifier}`, token);
               if (obj) obj.unresolved = true;
           }
@@ -170,7 +170,7 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
                     }
                     let nextPk = tokens[tmpPos2];
                     let isCurrentProperty = nextPk && (nextPk.value === ':' || nextPk.value === ':=');
-                    let isPropAccess = (prevValue === '.');
+                    let isPropAccess = (prevValue === '.' || prevValue === '::');
                     if (!isPropAccess) {
                         if (!isCurrentProperty || isRhs) {
                              if (!isCurrentProperty || nextPk?.value === '::') {
@@ -208,7 +208,9 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
       const startTok = tokens[pos-1];
       skipTrivia();
       const typeTok = peek();
+      let isMat = false;
       if (typeTok.type === 'Keyword' && (typeTok.value === 'mat' || typeTok.value === 'assembly')) {
+          if (typeTok.value === 'mat') isMat = true;
           advance();
       }
       const nameTok = expect('Identifier');
@@ -217,6 +219,130 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
           declaredNames.add(nameTok.value);
       }
       expect('Punctuation', '=');
+
+      if (isMat) {
+          const umoTok = expect('Identifier');
+          if (umoTok && (umoTok.value !== 'umo' && umoTok.value !== 'geo')) {
+               report('E010', 'Expected umo', umoTok);
+          }
+          expect('Punctuation', '::');
+          const phylumTok = expect('Identifier');
+          expect('Punctuation', '.');
+          const subClassTok = expect('Identifier');
+          expect('Punctuation', '.');
+          const isotopeTok = expect('Identifier');
+
+          while (pos < tokens.length && peek().value !== '{') advance();
+          expect('Punctuation', '{', 'E002');
+
+          const properties: MaterialProperty[] = [];
+          const boundedStates: BoundedState[] = [];
+
+          while (pos < tokens.length && peek().value !== '}' && peek().type !== 'EOF') {
+              skipTrivia();
+              const childStart = peek();
+              if (childStart.value === '}') break;
+
+              if (match('Punctuation', '@[')) {
+                  let key = '';
+                  const keyStart = peek();
+                  while (pos < tokens.length && peek().value !== ':' && peek().value !== ']') {
+                      key += advance().value;
+                  }
+                  if (match('Punctuation', ':')) {
+                      let valTokens = [];
+                      let depth = 1;
+                      while (pos < tokens.length) {
+                          const t = peek();
+                          if (t.value === '[') depth++;
+                          if (t.value === ']') depth--;
+                          if (depth === 0) break;
+                          valTokens.push(advance());
+                      }
+                      let unit = '';
+                      if (valTokens.length >= 2 && valTokens[valTokens.length-1].type === 'Identifier' && valTokens[valTokens.length-2].value === '.') {
+                          unit = valTokens.pop()!.value;
+                          valTokens.pop();
+                      }
+                      let valueNode: number | number[] = 0;
+                      let numTokens = valTokens.filter(t => t.type === 'Number');
+                      if (numTokens.length === 1) valueNode = Number(numTokens[0].value);
+                      else if (numTokens.length > 1) valueNode = numTokens.map(t => Number(t.value));
+
+                      let isRequired = false;
+                      if (!MaterialPropertySchema[key]) {
+                          report('E011', `Unknown property key: ${key}`, keyStart);
+                      } else {
+                          isRequired = MaterialPropertySchema[key].isRequired;
+                      }
+
+                      properties.push({ key, value: valueNode, unit, isRequired });
+                  }
+                  expect('Punctuation', ']');
+              } else if (match('Keyword', 'when')) {
+                  let condition = '';
+                  while (pos < tokens.length && peek().value !== '{') {
+                      condition += advance().value;
+                  }
+                  expect('Punctuation', '{');
+                  const overrides: MaterialProperty[] = [];
+                  while (pos < tokens.length && peek().value !== '}') {
+                      skipTrivia();
+                      if (peek().value === '}') break;
+                      if (match('Punctuation', '@[')) {
+                          let key = '';
+                          while (pos < tokens.length && peek().value !== ':' && peek().value !== ']') {
+                              key += advance().value;
+                          }
+                          if (match('Punctuation', ':')) {
+                              let valTokens = [];
+                              let depth = 1;
+                              while (pos < tokens.length) {
+                                  const t = peek();
+                                  if (t.value === '[') depth++;
+                                  if (t.value === ']') depth--;
+                                  if (depth === 0) break;
+                                  valTokens.push(advance());
+                              }
+                              let unit = '';
+                              if (valTokens.length >= 2 && valTokens[valTokens.length-1].type === 'Identifier' && valTokens[valTokens.length-2].value === '.') {
+                                  unit = valTokens.pop()!.value;
+                                  valTokens.pop(); 
+                              }
+                              let valueNode: number | number[] = 0;
+                              let numTokens = valTokens.filter(t => t.type === 'Number');
+                              if (numTokens.length === 1) valueNode = Number(numTokens[0].value);
+                              else if (numTokens.length > 1) valueNode = numTokens.map(t => Number(t.value));
+
+                              let isRequired = MaterialPropertySchema[key] ? MaterialPropertySchema[key].isRequired : false;
+                              overrides.push({ key, value: valueNode, unit, isRequired });
+                          }
+                          expect('Punctuation', ']');
+                      } else {
+                          advance();
+                      }
+                  }
+                  expect('Punctuation', '}');
+                  boundedStates.push({ condition: condition.trim(), overrides });
+              } else {
+                  advance();
+              }
+          }
+          const endTok = expect('Punctuation', '}', 'E002');
+          
+          return {
+              type: 'MaterialDefinition',
+              start: startTok.start,
+              end: endTok.end,
+              name: nameTok ? nameTok.value : '',
+              phylum: phylumTok ? phylumTok.value as any : 'lignocellulosica',
+              subClass: subClassTok ? subClassTok.value : '',
+              isotope: isotopeTok ? isotopeTok.value : '',
+              properties,
+              boundedStates
+          };
+      }
+
       return parseGenericBlock('Def', { name: nameTok ? nameTok.value : '' });
   }
 
@@ -249,8 +375,22 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
         if (match('Keyword', 'context')) node = parseGenericBlock('Context');
         else if (match('Keyword', 'building')) node = parseBuilding();
         else if (match('Keyword', 'def')) node = parseDef();
-        else if (match('Keyword', 'trait')) node = parseGenericBlock('Trait');
-        else if (match('Keyword', 'goal')) node = parseGenericBlock('Goal');
+        else if (match('Keyword', 'trait')) {
+            const nameTok = expect('Identifier');
+            if (nameTok && nameTok.value) {
+                if (declaredNames.has(nameTok.value)) report('E004', 'Duplicate declaration', nameTok);
+                declaredNames.add(nameTok.value);
+            }
+            node = parseGenericBlock('Trait', { name: nameTok ? nameTok.value : '' });
+        }
+        else if (match('Keyword', 'goal')) {
+            const nameTok = expect('Identifier');
+            if (nameTok && nameTok.value) {
+                if (declaredNames.has(nameTok.value)) report('E004', 'Duplicate declaration', nameTok);
+                declaredNames.add(nameTok.value);
+            }
+            node = parseGenericBlock('Goal', { name: nameTok ? nameTok.value : '' });
+        }
         else if (match('Keyword', 'import')) {
            const imp = advance(); 
            const str = expect('String');

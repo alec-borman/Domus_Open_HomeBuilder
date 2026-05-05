@@ -55,8 +55,19 @@ export function injectNode(ast: Program, path: string, nodeSource: string): { cs
     }
     
     // Bounds invalidation check
-    if (path.toLowerCase() === 'context' && nodeSource.includes('floor')) {
-        return { cst: null, diagnostics: [{ severity: 'error', code: 'E015', message: 'Cannot inject floor into context', line: 1, col: 1, offset: 0, length: 0 }] };
+    const loweredPath = path.toLowerCase();
+    const isContext = loweredPath.includes('context');
+    const isDef = loweredPath.includes('def[');
+    const isTrait = loweredPath.includes('trait[');
+    
+    if (isContext && (nodeSource.includes('floor') || nodeSource.includes('zone'))) {
+        return { cst: null, diagnostics: [{ severity: 'error', code: 'E015', message: 'Cannot inject floor/zone into context', line: 1, col: 1, offset: 0, length: 0 }] };
+    }
+    if (isDef && nodeSource.includes('building')) {
+        return { cst: null, diagnostics: [{ severity: 'error', code: 'E015', message: 'Cannot inject building into def', line: 1, col: 1, offset: 0, length: 0 }] };
+    }
+    if (isTrait && nodeSource.includes('floor')) {
+        return { cst: null, diagnostics: [{ severity: 'error', code: 'E015', message: 'Cannot inject floor into trait', line: 1, col: 1, offset: 0, length: 0 }] };
     }
 
     const isCRLF = ast.tokens.some(t => t.value.includes('\\r\\n'));

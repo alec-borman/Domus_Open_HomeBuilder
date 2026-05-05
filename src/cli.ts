@@ -58,13 +58,12 @@ function main() {
         }
         case 'patch': {
             const filePath = args[1];
-            const injectIndex = args.indexOf('--inject');
-            if (!filePath || injectIndex === -1 || injectIndex + 2 >= args.length) {
-                 console.error('Usage: domus patch <file> --inject <path> <snippet>');
+            const path = args[2];
+            const snippet = args[3];
+            if (!filePath || !path || !snippet) {
+                 console.error('Usage: domus patch <file> <path> <snippet>');
                  process.exit(1);
             }
-            const path = args[injectIndex + 1];
-            const snippet = args[injectIndex + 2];
             try {
                 const source = readFileSync(filePath, 'utf-8');
                 const { ast, diagnostics } = parse(source);

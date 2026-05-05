@@ -1,2 +1,22 @@
-import { Lexer } from './src/lexer.js';
-console.log(new Lexer('@[therm.lambda: 0.13.W_m2K]').tokenize().slice(0, 5));
+domus "1.2.0"
+
+context {
+  project: "Alpine Retreat"
+  profile: "US-CO-Denver-IRC2024"
+  geodetic: geo(39.739, -104.990)
+}
+
+def mat SPF_No2 = umo::lignocellulosica.sawn.spf_grade_2 {
+  @[mech.density: 26.2.pcf]
+  @[mech.E: [1400000, 70000, 70000].psi]
+}
+
+building "Lodge" {
+  floor 1 {
+    #[structural] perimeter ext_wall { width: 60.ft, depth: 40.ft }
+    zone "Mech" {
+      hvac.supply(loc: [10.ft, 10.ft]) ~> perimeter.shaft ~> site.main
+    }
+  
+    zone "NewZone" {}}
+}
