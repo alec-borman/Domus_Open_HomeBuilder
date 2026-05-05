@@ -1,7 +1,7 @@
 import { expect, test, describe } from 'vitest';
 import { parse } from '../src/parser.js';
 import { Lexer } from '../src/lexer.js';
-import { serialize, injectNode } from '../src/patcher.js';
+import { serialize, injectNode, deleteNode, replaceNode } from '../src/patcher.js';
 
 const fixtureA = `domus "1.2.0"
 
@@ -62,6 +62,9 @@ describe('Compiler: Parser & CST Fidelity', () => {
 
   test('2. Fixture B parses losslessly and serializes to identical string', () => {
     const { ast, diagnostics } = parse(fixtureB);
+    if (diagnostics.length > 0) {
+        console.error('FIXTURE B DIAGNOSTICS:', diagnostics);
+    }
     expect(diagnostics).toHaveLength(0);
     const serialized = serialize(ast);
     expect(serialized).toBe(fixtureB);
@@ -84,16 +87,52 @@ describe('Compiler: Patcher', () => {
      expect(diagnostics).toHaveLength(0);
      
      const injection = `\n    zone "NewZone" {}\n`;
-     // In injectNode we look for path building floor
-     // Let's modify the path format logic to easily hit the condition
-     const res = injectNode(ast, 'building.Lodge.floor.1', injection);
+     const res = injectNode(ast, 'Building["Lodge"].Floor[1]', injection);
+     if (res.diagnostics.length > 0) {
+         console.error('DIAGNOSTICS:', res.diagnostics);
+     }
      expect(res.diagnostics).toHaveLength(0);
      expect(res.cst).not.toBeNull();
      
      const newSource = serialize(res.cst!);
      expect(newSource).toContain('zone "NewZone"');
-     // Validate it parses correctly
      const { diagnostics: newDiags } = parse(newSource);
      expect(newDiags).toHaveLength(0);
+  });
+
+  test('2. Delete node losslessly removes CST components', () => {
+     const { ast, diagnostics } = parse(fixtureA);
+     const res = deleteNode(ast, 'Building["Lodge"].Floor[1].Zone["Mech"]');
+     if (res.diagnostics.length > 0) {
+         console.error('DELETE DIAGNOSTICS:', res.diagnostics);
+     }
+     expect(res.diagnostics).toHaveLength(0);
+     expect(res.cst).not.toBeNull();
+     const newSource = serialize(res.cst!);
+     expect(newSource).not.toContain('zone "Mech"');
+     expect(parse(newSource).diagnostics).toHaveLength(0);
+  });
+
+  test('3. Replace node losslessly updates CST components', () => {
+     const { ast, diagnostics } = parse(fixtureA);
+     const replacement = `zone "ReplacedMech" { hvac.return() }`;
+     const res = replaceNode(ast, 'Building["Lodge"].Floor[1].Zone["Mech"]', replacement);
+     if (res.diagnostics.length > 0) {
+         console.error('REPLACE DIAGNOSTICS:', res.diagnostics);
+     }
+     expect(res.diagnostics).toHaveLength(0);
+     expect(res.cst).not.toBeNull();
+     const newSource = serialize(res.cst!);
+     expect(newSource).not.toContain('zone "Mech"');
+     expect(newSource).toContain('zone "ReplacedMech"');
+     expect(parse(newSource).diagnostics).toHaveLength(0);
+  });
+});
+
+describe('Compiler: DBU', () => {
+  test('1. DBU correctly catches undeclared identifier references', () => {
+     const source = `domus "1.0"\nbuilding "Test" {\n  floor 1 {\n    zone "TestZone" {\n      width: unknown_variable\n    }\n  }\n}`;
+     const { diagnostics } = parse(source);
+     expect(diagnostics).toContainEqual(expect.objectContaining({ code: 'E003', message: 'Undeclared identifier reference: unknown_variable' }));
   });
 });

@@ -87,8 +87,24 @@ function main() {
             }
         }
         case 'format': {
-            console.log('Format not implemented yet.');
-            process.exit(0);
+            const filePath = args[1];
+            if (!filePath) {
+                console.error('Missing file path for format command');
+                process.exit(1);
+            }
+            try {
+                const source = readFileSync(filePath, 'utf-8');
+                const { ast, diagnostics } = parse(source);
+                if (diagnostics.length > 0) {
+                    process.exit(1);
+                }
+                const newSource = serialize(ast);
+                process.stdout.write(newSource);
+                process.exit(0);
+            } catch (err: any) {
+                console.error(`Error formatting file: ${err.message}`);
+                process.exit(1);
+            }
         }
         default:
             console.error(`Unknown command: ${command}`);

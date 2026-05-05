@@ -48,9 +48,13 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
     return errTok;
   }
 
-  function checkUnresolved(identifier: string, token: Token) {
-      // Temporarily disabled to avoid false positives on struct properties
-      // if (!declaredNames.has(identifier)) { ... }
+  function checkUnresolved(identifier: string, token: Token, obj?: any) {
+      if (!declaredNames.has(identifier)) {
+          if (!['umo', 'geo', 'optimize', 'maximize_solar_gain', 'hvac', 'site', 'perimeter', 'ft', 'm', 'kg_m3', 'MPa', 'W_m2K', 'pcf', 'psi'].includes(identifier)) {
+              report('E003', `Undeclared identifier reference: ${identifier}`, token);
+              if (obj) obj.unresolved = true;
+          }
+      }
   }
 
   function recover(syncKeywords: string[]) {
@@ -67,16 +71,21 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
     while (match('Punctuation', '#[')) {
       const startTok = tokens[pos-1];
       const inner = [];
-      while (pos < tokens.length && peek().value !== ']') {
-        inner.push(advance());
+      let depth = 1;
+      while (pos < tokens.length) {
+        const t = advance();
+        if (t.value === '[') depth++;
+        if (t.value === ']') depth--;
+        if (depth === 0) break;
+        inner.push(t);
       }
-      const endTok = expect('Punctuation', ']');
+      const endTok = tokens[pos-1];
       annotations.push({ type: 'Annotation', start: startTok.start, end: endTok.end, inner });
     }
     return annotations;
   }
 
-  function parseGenericBlock(type: string): CSTNode {
+  function parseGenericBlock(type: string, props?: any): CSTNode {
      const startTok = tokens[pos-1];
      while (pos < tokens.length && peek().value !== '{') advance();
      expect('Punctuation', '{', 'E002');
@@ -90,17 +99,60 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
          const annotations = parseAnnotations();
          
          if (match('Punctuation', '@[')) {
-            while(pos < tokens.length && peek().value !== ']') advance();
-            expect('Punctuation', ']');
-         } else if (match('Keyword', 'floor') || match('Keyword', 'zone') || match('Keyword', 'perimeter') || match('Keyword', 'when')) {
-            const b = parseGenericBlock('NestedBlock');
+            let depth = 1;
+            while(pos < tokens.length) {
+                const nextVal = peek().value;
+                if (nextVal === '[') depth++;
+                if (nextVal === ']') depth--;
+                advance();
+                if (depth === 0) break;
+            }
+         } else if (match('Keyword', 'floor')) {
+            const kwTok = tokens[pos-1];
+            const levelTok = expect('Number');
+            let levelVal = Number(levelTok.value);
+            if (isNaN(levelVal)) levelVal = levelTok.value as any;
+            const b = parseGenericBlock('Floor', { level: levelVal, start: annotations.length > 0 ? annotations[0].start : kwTok.start });
+            b.annotations = annotations;
+            body.push(b);
+         } else if (match('Keyword', 'zone')) {
+            const kwTok = tokens[pos-1];
+            const nameTok = expect('String');
+            const rawName = nameTok.value.replace(/"/g, '');
+            const b = parseGenericBlock('Zone', { name: rawName, start: annotations.length > 0 ? annotations[0].start : kwTok.start });
+            b.annotations = annotations;
+            body.push(b);
+         } else if (match('Keyword', 'perimeter') || match('Keyword', 'when')) {
+            const kwTok = tokens[pos-1];
+            const b = parseGenericBlock('NestedBlock', { start: annotations.length > 0 ? annotations[0].start : kwTok.start });
             b.annotations = annotations;
             body.push(b);
          } else if (match('Identifier') || match('Keyword')) {
             const idTok = tokens[pos-1];
-            if (idTok.type === 'Identifier') checkUnresolved(idTok.value, idTok);
+            let isProperty = false;
+            let tmpPos = pos;
+            while (tmpPos < tokens.length && (tokens[tmpPos].type === 'Whitespace' || tokens[tmpPos].type === 'Comment')) {
+                tmpPos++;
+            }
+            let pk = tokens[tmpPos];
+            if (pk && (pk.value === ':' || pk.value === ':=')) {
+                isProperty = true;
+            }
+            if (idTok.type === 'Identifier' && !isProperty) {
+                checkUnresolved(idTok.value, idTok);
+            }
+            
+            let isRhs = false;
+            let prevValue = '';
             while (pos < tokens.length) {
-                const next = peek();
+                const next = tokens[pos];
+                if (next.type === 'Whitespace' || next.type === 'Comment') { 
+                    if (next.value.includes('\\n')) {
+                        break;
+                    }
+                    advance(); 
+                    continue; 
+                }
                 if (next.value === '{') {
                     parseGenericBlock('NestedBlock');
                     break;
@@ -108,7 +160,28 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
                 if (next.type === 'Whitespace' && next.value.includes('\\n')) break;
                 if (next.value === '}') break;
                 const adv = advance();
-                if (adv.type === 'Identifier') checkUnresolved(adv.value, adv);
+                
+                if (adv.value === ':' || adv.value === '=' || adv.value === ':=') {
+                    isRhs = true;
+                } else if (adv.type === 'Identifier') {
+                    let tmpPos2 = pos;
+                    while (tmpPos2 < tokens.length && (tokens[tmpPos2].type === 'Whitespace' || tokens[tmpPos2].type === 'Comment')) {
+                        tmpPos2++;
+                    }
+                    let nextPk = tokens[tmpPos2];
+                    let isCurrentProperty = nextPk && (nextPk.value === ':' || nextPk.value === ':=');
+                    let isPropAccess = (prevValue === '.');
+                    if (!isPropAccess) {
+                        if (!isCurrentProperty || isRhs) {
+                             if (!isCurrentProperty || nextPk?.value === '::') {
+                                 checkUnresolved(adv.value, adv);
+                             }
+                        }
+                    }
+                }
+                if (adv.type !== 'Whitespace' && adv.type !== 'Comment') {
+                    prevValue = adv.value;
+                }
             }
          } else {
             advance();
@@ -116,17 +189,19 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
      }
      
      const endTok = expect('Punctuation', '}', 'E002');
-     return { type, start: startTok.start, end: endTok.end, body };
+     const ret: any = { type, start: startTok.start, end: endTok.end, body };
+     if (props) Object.assign(ret, props);
+     return ret;
   }
 
   function parseBuilding(): CSTNode {
       const nameTok = expect('String');
+      let rawName = nameTok ? nameTok.value.replace(/"/g, '') : '';
       if (nameTok && nameTok.value) {
-          const rawName = nameTok.value.replace(/"/g, '');
           if (declaredNames.has(rawName)) report('E004', 'Duplicate declaration', nameTok);
           declaredNames.add(rawName);
       }
-      return parseGenericBlock('Building');
+      return parseGenericBlock('Building', { name: rawName });
   }
 
   function parseDef(): CSTNode {
@@ -142,7 +217,7 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
           declaredNames.add(nameTok.value);
       }
       expect('Punctuation', '=');
-      return parseGenericBlock('MaterialDefinition');
+      return parseGenericBlock('Def', { name: nameTok ? nameTok.value : '' });
   }
 
   function parseTopLevel(): CSTNode[] {
