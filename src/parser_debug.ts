@@ -72,7 +72,7 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
       let base = fullIdentifier.split('.')[0].split('::')[0];
       const BUILT_IN_INTRINSICS = new Set(['umo', 'geo', 'optimize', 'site', 'context']);
       if (!declaredNames.has(base) && !BUILT_IN_INTRINSICS.has(base)) {
-          report('E003', `Undeclared identifier reference: ${fullIdentifier}`, token);
+          console.log({ base, startIdx: pos, tokenValue: token.value, fullIdentifier }); report('E003', `Undeclared identifier reference: ${fullIdentifier}`, token);
           if (obj) obj.unresolved = true;
       }
   }
@@ -159,7 +159,7 @@ export function parse(input: string): { ast: Program, diagnostics: ParseDiagnost
                 isProperty = true;
             }
             if (idTok.type === 'Identifier' && !isProperty) {
-                checkUnresolved(extractFullReference(pos - 1), idTok);
+                checkUnresolved(extractFullReference(pos), idTok);
             }
             
             let isRhs = false;

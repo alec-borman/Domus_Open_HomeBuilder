@@ -11,6 +11,8 @@ context {
   geodetic: geo(39.739, -104.990)
 }
 
+trait hvac {}
+
 def mat SPF_No2 = umo::lignocellulosica.sawn.spf_grade_2 {
   @[mech.density: 26.2.pcf]
   @[mech.E: [1400000, 70000, 70000].psi]
@@ -32,6 +34,9 @@ context {
   profile: "EU-DE-Munich-Eurocode2025"
   geodetic: geo(48.135, 11.582)
 }
+
+trait hvac {}
+goal maximize_solar_gain {}
 
 def mat CLT_GL24h = umo::lignocellulosica.engineered.clt {
   @[mech.density: 420.0.kg_m3]
@@ -213,5 +218,13 @@ describe('Compiler: DBU', () => {
      const source = `domus "1.0"\nbuilding "Test" {\n  floor 1 {\n    zone "TestZone" {\n      width: unknown_variable\n    }\n  }\n}`;
      const { diagnostics } = parse(source);
      expect(diagnostics).toContainEqual(expect.objectContaining({ code: 'E003', message: 'Undeclared identifier reference: unknown_variable' }));
+  });
+
+  test('2. DBU does not flag unknown base identifiers that are intrinsic or forward-declared', () => {
+    const source = `domus "1.0"\nbuilding "Test" {\n  floor 1 {\n    zone "Z" {\n      plumbing.sink()\n    }\n  }\n}`;
+    const { diagnostics } = parse(source);
+    // \`plumbing\` is neither declared nor a built-in intrinsic, so it SHOULD be flagged.
+    // Conversely, a reference like \`hvac.supply\` whose base is already in the code or a built-in must NOT be flagged.
+    expect(diagnostics).toContainEqual(expect.objectContaining({ code: 'E003', message: expect.stringContaining('plumbing.sink') }));
   });
 });
